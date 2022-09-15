@@ -1,3 +1,5 @@
+#Author Zhou Jiayi in XJTU
+#RCPO based on PPO
 import torch
 import torch.optim as optim
 import numpy as np
