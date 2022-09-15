@@ -1,5 +1,3 @@
-#Author Zhou Jiayi in XJTU
-#CRPO based on DDPG
 import torch
 import torch.optim as optim
 import numpy as np
@@ -13,15 +11,15 @@ import copy
 import gym
 import random
 
-# device, CPU or the GPU of your choice
+#device, CPU or the GPU of your choice
 GPU = 0
 DEVICE = device = torch.device('cuda')
 
-# environment names
+#environment names
 RAM_ENV_NAME = 'Safexp-PointGoal2-v0'
 VISUAL_ENV_NAME = None
 
-# Agent parameters
+#Agent parameters
 BATCH_SIZE = 256
 LR1 = 0.0001
 LR2 = 0.001
@@ -30,15 +28,15 @@ SPEED2 = 1
 STEP = 1
 TAU = 0.001
 LEARNING_TIME = 1
-OUN = True,
-BN = False,
-CLIP = False,
-INIT = True,
-HIDDEN = [400, 300]
+OUN=True,
+BN=False,
+CLIP=False,
+INIT=True,
+HIDDEN=[400, 300]
 
-# Training parameters
+#Training parameters
 L = 1000
-N = 1
+N = 5
 
 
 class ReplayBuffer:
@@ -46,8 +44,8 @@ class ReplayBuffer:
     def __init__(self, maxlen):
         self.memory = deque(maxlen=maxlen)
 
-    def add(self, state, action, reward, log, next_state, done):
-        self.memory.append((state, action, reward, log, next_state, done))
+    def add(self, state, action, reward, next_state, done):
+        self.memory.append((state, action, reward, next_state, done))
 
     def sample(self, batchsize):
         experiences = random.sample(self.memory, k=batchsize)
@@ -55,10 +53,9 @@ class ReplayBuffer:
         states = torch.from_numpy(np.vstack([e[0] for e in experiences])).float().to(device)
         actions = torch.from_numpy(np.vstack([e[1] for e in experiences])).float().to(device)
         rewards = torch.from_numpy(np.vstack([e[2] for e in experiences])).float().to(device)
-        costs = torch.from_numpy(np.vstack([e[3] for e in experiences])).float().to(device)
-        next_states = torch.from_numpy(np.vstack([e[4] for e in experiences])).float().to(device)
-        dones = torch.from_numpy(np.vstack([e[5] for e in experiences]).astype(np.uint8)).float().to(device)
-        return states, actions, rewards, costs, next_states, dones
+        next_states = torch.from_numpy(np.vstack([e[3] for e in experiences])).float().to(device)
+        dones = torch.from_numpy(np.vstack([e[4] for e in experiences]).astype(np.uint8)).float().to(device)
+        return states, actions, rewards, next_states, dones
 
 
 class OUNoise:
@@ -78,7 +75,6 @@ class OUNoise:
         dx = self.theta * (self.mu - x) + self.sigma * np.random.uniform(size=self.action_size)
         self.state = x + dx
         return self.state
-
 
 def hidden_init(layer):
     fan_in = layer.weight.data.size()[0]
@@ -120,11 +116,11 @@ class Actor(nn.Module):
 
 class Critic(nn.Module):
 
-    def __init__(self, state_size, action_size, out_size, batchnorm, initialize, hidden=[256, 256]):
+    def __init__(self, state_size, action_size, batchnorm, initialize, hidden=[256, 256]):
         super(Critic, self).__init__()
         self.fc1 = nn.Linear(state_size, hidden[0])
         self.fc2 = nn.Linear(hidden[0] + action_size, hidden[1])
-        self.fc3 = nn.Linear(hidden[1], out_size)
+        self.fc3 = nn.Linear(hidden[1], 1)
         self.bn1 = nn.BatchNorm1d(hidden[0])
         self.batchnorm = batchnorm
         if initialize:
@@ -151,7 +147,7 @@ class Critic(nn.Module):
 
 class DDPG_Agent:
 
-    def __init__(self, env, num_cost, lr1=0.0001, lr2=0.001, tau=0.001, speed1=1, speed2=1, step=1, learning_time=1,
+    def __init__(self, env, lr1=0.0001, lr2=0.001, tau=0.001, speed1=1, speed2=1, step=1, learning_time=1,
                  batch_size=64, OUN_noise=True, batchnorm=True, clip=True, initialize=True, hidden=[256, 256]):
 
         # Initialize environment
@@ -175,17 +171,12 @@ class DDPG_Agent:
         self.clip = clip
         self.initialize = initialize
         self.hidden = hidden
-        self.num_cost = num_cost - 1
 
         # Initialize agent (networks, replyabuffer and noise)
         self.actor_local = Actor(self.state_size, self.action_size, self.batchnorm, initialize, hidden).to(device)
         self.actor_target = Actor(self.state_size, self.action_size, self.batchnorm, initialize, hidden).to(device)
-        self.critic_local = Critic(self.state_size, self.action_size, 1, self.batchnorm, initialize, hidden).to(device)
-        self.critic_target = Critic(self.state_size, self.action_size, 1, self.batchnorm, initialize, hidden).to(device)
-        self.cost_local = Critic(self.state_size, self.action_size, self.num_cost, self.batchnorm, initialize,
-                                 hidden).to(device)
-        self.cost_target = Critic(self.state_size, self.action_size, self.num_cost, self.batchnorm, initialize,
-                                  hidden).to(device)
+        self.critic_local = Critic(self.state_size, self.action_size, self.batchnorm, initialize, hidden).to(device)
+        self.critic_target = Critic(self.state_size, self.action_size, self.batchnorm, initialize, hidden).to(device)
         # self.actor_local.eval()
         # self.actor_target.eval()
         # self.critic_local.eval()
@@ -193,11 +184,9 @@ class DDPG_Agent:
 
         self.soft_update(self.actor_local, self.actor_target, 1)
         self.soft_update(self.critic_local, self.critic_target, 1)
-        self.soft_update(self.cost_local, self.cost_target, 1)
         self.actor_optimizer = optim.Adam(self.actor_local.parameters(), lr=self.lr1)
         self.critic_optimizer = optim.Adam(self.critic_local.parameters(), lr=self.lr2)
-        self.cost_optimizer = optim.Adam(self.cost_local.parameters(), lr=self.lr2)
-        self.memory = ReplayBuffer(int(1e5))
+        self.memory = ReplayBuffer(int(1e6))
         self.noise = OUNoise(action_size=self.action_size)
 
     def act(self, state, i):
@@ -233,16 +222,10 @@ class DDPG_Agent:
                 None
 
     def learn(self):
-        # Calculate the total times of actor update on reward or cost direction
-        t1 = 0
-        t2 = 0
 
-        # sample from replay buffer
         experiences = self.memory.sample(256)
-        states, actions, rewards, costs, next_states, dones = experiences
-        rewards = rewards * torch.abs(costs.mean() / rewards.mean())
+        states, actions, rewards, next_states, dones = experiences
 
-        # Reward_critic update
         with torch.no_grad():
             expected_rewards = rewards + (1 - dones) * self.gamma * self.critic_target(next_states,
                                                                                        self.actor_target(next_states))
@@ -256,89 +239,41 @@ class DDPG_Agent:
                 torch.nn.utils.clip_grad_norm_(self.critic_local.parameters(), 1)
             self.critic_optimizer.step()
 
-        # Cost critic update
-        dones = torch.Tensor(self.batch_size, self.num_cost).copy_(dones).to(device)
-        with torch.no_grad():
-            expected_costs = costs + (1 - dones) * self.gamma * self.cost_target(next_states,
-                                                                                 self.actor_target(next_states))
-        for _ in range(self.speed1):
-            observed_costs = self.cost_local(states, actions)
-            L = (expected_costs - observed_costs).pow(2).mean()
-            self.cost_optimizer.zero_grad()
+        for _ in range(self.speed2):
+            L = - self.critic_local(states, self.actor_local(states)).mean()
+            self.actor_optimizer.zero_grad()
             L.backward()
             if self.clip:
-                torch.nn.utils.clip_grad_norm_(self.critic_local.parameters(), 1)
-            self.cost_optimizer.step()
+                torch.nn.utils.clip_grad_norm_(self.actor_local.parameters(), 1)
+            self.actor_optimizer.step()
 
-        # Determine the direction of policy update
-        J_function = observed_costs.mean(dim=0).detach()
-        penalty_objects = []
-        for i in range(len(J_function.shape)):
-            if J_function[i] >= 0.3:
-                penalty_objects.append(i)
-
-        # Preform reward direction update
-        if len(penalty_objects) == 0:
-            for _ in range(self.speed2):
-                t1 += 1
-                L = - self.critic_local(states, self.actor_local(states)).mean()
-                self.actor_optimizer.zero_grad()
-                L.backward()
-                if self.clip:
-                    torch.nn.utils.clip_grad_norm_(self.actor_local.parameters(), 1)
-                self.actor_optimizer.step()
-
-        # Preform cost direction update
-        else:
-            for _ in range(self.speed2):
-                t2 += 1
-                update_index = random.choice(penalty_objects)
-                L = self.cost_local(states, self.actor_local(states)).mean(dim=0)[update_index]
-                self.actor_optimizer.zero_grad()
-                L.backward()
-                if self.clip:
-                    torch.nn.utils.clip_grad_norm_(self.actor_local.parameters(), 1)
-                self.actor_optimizer.step()
-
-        # Update target network
         self.soft_update(self.actor_local, self.actor_target, self.tau)
         self.soft_update(self.critic_local, self.critic_target, self.tau)
-        self.soft_update(self.cost_local, self.cost_target, self.tau)
-        return t1, t2
 
 
 def train(n_episodes, env, agent):
     rewards = []
     average_rewards = []
-    costs = []
-    average_cost = []
+
     for i in range(1, n_episodes + 1):
         episodic_reward = 0
-        episodic_cost = 0
-        reward_update = 0
-        cost_update = 0
         state = env.reset()
         agent.noise.reset()
+
         action = agent.act(state, i)
         t = 0
 
         while True:
-            next_state, reward, done, info = env.step(action)
+            next_state, reward, done, _ = env.step(action)
             episodic_reward += reward
-            episodic_cost += info['cost']
-            log = []
-            for key in info.keys():
-                if (key != 'cost' and key != 'goal_met'):
-                    log.append(info[key])
-            agent.memory.add(state, action, reward, log, next_state, done)
+            agent.memory.add(state, action, reward, next_state, done)
             t += 1
 
             if len(agent.memory.memory) > agent.batch_size:
                 if t % agent.step == 0:
                     for _ in range(agent.learning_time):
-                        t1, t2 = agent.learn()
-                        reward_update += t1
-                        cost_update += t2
+                        agent.learn()
+
             if done:
                 break
 
@@ -346,15 +281,11 @@ def train(n_episodes, env, agent):
             action = agent.act(state, i)
 
         rewards.append(episodic_reward)
-        costs.append(episodic_cost)
         average_rewards.append(np.mean(rewards[-100:]))
-        average_cost.append(np.mean(costs[-100:]))
 
-        print(
-            '\rEpisode {}, Reward {:.2f}, Average Reward {:.2f}, Cost {:.2f}, Average Cost {:.2f}, '
-            'reward update times:{}, cost update times:{}'.format(
-                i, episodic_reward, average_rewards[-1], episodic_cost, average_cost[-1], reward_update, cost_update),
-            end='')
+        print('\rEpisode {}. Total score for this episode: {:.3f}, average score {:.3f}'.format(i, rewards[-1],
+                                                                                                average_rewards[-1]),
+              end='')
         if i % 100 == 0:
             print('')
 
@@ -366,14 +297,9 @@ if __name__ == '__main__':
 
     rewards = np.zeros((N, L))
     average_rewards = np.zeros((N, L))
-    state = env.reset()
-    action = np.random.randn(env.action_space.shape[0])
-    _, _, _, info = env.step(action)
-    num_cost = len(info)
     for i in range(N):
         print('{}/{}'.format(i + 1, N))
         agent = DDPG_Agent(env=env,
-                           num_cost=num_cost,
                            lr1=LR1,
                            lr2=LR2,
                            tau=TAU,
